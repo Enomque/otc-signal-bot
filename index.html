@@ -1,1 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Option OTC Signal Demo + Live Asset Payouts</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans">
+
+  <div class="max-w-4xl mx-auto py-10 px-4">
+    <h1 class="text-3xl font-bold text-center mb-4">
+      Pocket Option OTC Signal Demo + Live Asset Payouts
+    </h1>
+    <p class="text-center text-sm text-red-400 mb-6">
+      This is a demo for educational purposes. Signals are simulated. Asset payouts are static snapshots—not real-time. Not financial advice.
+    </p>
+
+    <canvas id="chart" height="100"></canvas>
+
+    <div class="mt-6 bg-gray-800 p-4 rounded shadow">
+      <h2 class="text-xl font-semibold mb-2">Latest Simulated Signal:</h2>
+      <div id="signal" class="text-3xl font-bold"></div>
+    </div>
+
+    <div class="mt-8 bg-gray-700 p-4 rounded">
+      <h2 class="text-xl font-semibold mb-3">Pocket Option OTC Assets (Sample Payouts)</h2>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="bg-gray-600">
+            <th class="p-2 text-left">Asset</th>
+            <th class="p-2 text-left">Payout / Accuracy</th>
+          </tr>
+        </thead>
+        <tbody id="assets-table"></tbody>
+      </table>
+    </div>
+
+    <div class="mt-6 text-xs text-gray-400 text-center">
+      *Payout percentages are based on sampled data and may vary in live platform.
+    </div>
+  </div>
+
+  <script>
+    // Dummy OHLC generator for simulation
+    function generateDummyData(len = 100) {
+      let data = [], price = 100;
+      for (let i = 0; i < len; i++) {
+        let open = price;
+        let close = open + (Math.random() - 0.5) * 2;
+        let high = Math.max(open, close) + Math.random();
+        let low = Math.min(open, close) - Math.random();
+        price =
+close; data.push({ open, high, low, close });
+      }
+      return data;
+    }
+
+    const data = generateDummyData();
+
+    // Indicators: SMA, MACD, Parabolic SAR, SuperTrend (simplified), ZigZag
+    function sma(data, p=10){ return data.map((_, i, a) =>
+ i < p ? null : a.slice(i-p+1, i+1).reduce((s, d) => s + d.close, 0)/p);
+    }
+    function macd(data) {
+      const ema=(p)=>{
+        const k=2/(p+1); let arr=[];
+        data.forEach((d,i)=>{
+          arr[i] = i===0?d.close:(d.close*k + arr[i-1]*(1-k));
+        }); return arr;
+      };
+      const line = ema(12).map((v,i)=>v - ema(26)[i]);
+      return line.map((v,i)=>({ macd:v, signal: ema(9)[i] }));
+    }
+    function parabolicSAR(data){
+      let sar=[data[0].low], af=0.02, ep=data[0].high, up=true;
+      for(let i=1;i<data.length;i++){
+        let prev=sar[i-1];
+        sar[i]=prev + af*(ep-prev);
+        if(up && data[i].low<sar[i]){
+          up=false; sar[i]=ep; ep=data[i].low; af=0.02;
+        } else if(!up && data[i].high>sar[i]){
+          up=true; sar[i]=ep; ep=data[i].high; af=0.02;
+        } else {
+          if(up && data[i].high>ep){ep=data[i].high; af = Math.min(af+0.02,0.2);}
+          else if(!up && data[i].low<ep){ep=data[i].low; af = Math.min(af+0.02,0.2);}
+        }
+      }
+      return sar;
+    }
+    function superTrend(data,p=10){
+      const atr = data.map((d,i)=>{
+        if(i===0) return 0;
+        return Math.max(d.high-d.low, Math.abs(d.high-data[i-1].close), Math.abs(d.low-data[i-1].close));
+      });
+      const avgAtr = sma(atr.map(v=>({ close:v })), p);
+      return avgAtr.map((v,i) => ({
+        upper: data[i].high + (v||0),
+        lower: data[i].low - (v||0),
+      }));
+    }
+    function zigZag(data,depth=5){
+      let points=[];
+      for(let i=depth;i<data.length-depth;i++){
+        let ih=true, il=true;
+        for(let j=1;j<=depth;j++){
+          if(data[i].high < data[i-j].high || data[i].high < data[i+j].high) ih=false;
+          if(data[i].low  > data[i-j].low || data[i].low  > data[i+j].low) il=false;
+        }
+        if(ih) points.push({ index: i, type: 'high' });
+        else if(il) points.push({ index: i, type: 'low' });
+      }
+      return points;
+    }
+
+    function getSignal(idx, links){
+      let up=0, down=0, {macd, sar, superTrend, zigzag}=links;
+      if(macd[idx] && macd[idx].macd > macd[idx].signal) up++; else down++;
+      if(sar[idx] < data[idx].close) up++; else down++;
+      if(superTrend[idx]){
+        if(data[idx].close > superTrend[idx].upper) up++;
+        if(data[idx].close < superTrend[idx].lower) down++;
+      }
+      if(zigzag.some(z=>z.index===idx && z.type==='low')) up++;
+      if(zigzag.some(z=>z.index===idx && z.type==='high')) down++;
+      if(up>down) return 'UP 📈';
+      if(down>up) return 'DOWN 📉';
+      return 'NO SIGNAL';
+    }
+
+    const sma10 = sma(data,10);
+    const macdData = macd(data);
+    const sar = parabolicSAR(data);
+    const superT = superTrend(data);
+    const zigzag = zigZag(data);
+    const latestIndex = data.length - 1;
+    const signal = getSignal(latestIndex, { macd: macdData, sar, superTrend: superT, zigzag });
+    document.getElementById('signal').innerText = signal;
+
+    // Chart
+    const labels = data.map((_,i) => `T-${data.length - i}`);
+    const closes = data.map(d=>d.close);
+    new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Close Price', data: closes, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.2)', tension:0.2 },
+          { label: 'SMA(10)', data: sma10.map(x=>x||null), borderColor: '#10b981', borderDash:[5,5], tension:0.2 },
+          { label: 'Parabolic SAR', data: sar, pointRadius:2, pointBackgroundColor:'orange', showLine:false },
+        ]
+      },
+      options: { responsive:true, scales:{ x:{display:false}, y:{beginAtZero:false} }, plugins:{ legend:{ labels:{ color:'white' } } } }
+    });
+
+    // Pocket Option OTC payout data (static sample)
+    const assets = [
+      { name: 'EUR/USD OTC (Forex)', payout: '78%' },
+      { name: 'USD/JPY OTC (Forex)', payout: '92%' },
+      { name: 'Ethereum OTC (Crypto)', payout: '91%' },
+      { name: 'NVIDIA OTC (Stock)', payout: '96%' }
+    ];
+    const tbody = document.getElementById('assets-table');
+    assets.forEach(a => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td class="p-2">${a.name}</td><td class="p-2">${a.payout}</td>`;
+      tbody.appendChild(tr);
+    });
+  </script>
+</body>
+</html>
 
